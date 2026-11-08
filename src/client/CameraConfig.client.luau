@@ -21,7 +21,8 @@ UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
 UserInputService.MouseIconEnabled = false -- you already hide this for your crosshair
 
 UserInputService.InputChanged:Connect(function(input, gameProcessed)
-	if gameProcessed then
+	-- don't spin the camera while the mouse is free (menu open)
+	if gameProcessed or UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
 		return
 	end
 	if input.UserInputType == Enum.UserInputType.MouseMovement then

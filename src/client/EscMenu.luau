@@ -32,7 +32,11 @@ local function EscMenu(UIManager)
 		end
 	end)
 	scope:Observer(isOpen):onChange(function()
-		if not Fusion.peek(isOpen) then
+		-- free the mouse and show the cursor while the menu is open; relock for gameplay on close
+		local open = Fusion.peek(isOpen)
+		UserInputService.MouseBehavior = if open then Enum.MouseBehavior.Default else Enum.MouseBehavior.LockCenter
+		UserInputService.MouseIconEnabled = open
+		if not open then
 			for _, hovered in hoveredStates do
 				hovered:set(false)
 			end

@@ -17,7 +17,8 @@ local function getEquippedGun()
 end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then
+	-- no shooting while the mouse is free (menu open)
+	if gameProcessed or UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
 		return
 	end
 
