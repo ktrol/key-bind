@@ -1,0 +1,56 @@
+{
+  "name": "Key Bind",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      },
+      "Packages": {
+        "$path": "Packages"
+      },
+      "RemoteEvents": {
+        "$className": "Folder",
+        "ConfirmHero": {
+          "$className": "RemoteEvent"
+        },
+        "UseAbility": {
+          "$className": "RemoteEvent"
+        },
+        "GunRemote": {
+          "$className": "RemoteEvent"
+        },
+         "FireGun": {
+          "$className": "RemoteEvent"
+        },
+         "ReloadGun": {
+          "$className": "RemoteEvent"
+        },
+         "StaminaUpdate": {
+          "$className": "RemoteEvent"
+        },
+        "UseDash": {
+           "$className": "RemoteEvent"
+        }
+      }
+    },
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "Client": {
+          "$path": "src/client"
+        }
+      }
+    },
+    "Workspace": {
+      "$properties": {
+        "FilteringEnabled": true
+      }
+    }
+  }
+}

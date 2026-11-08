@@ -1,0 +1,12 @@
+# Project place file
+/Key Bind.rbxlx
+
+# Roblox Studio lock files
+/*.rbxlx.lock
+/*.rbxl.lock
+
+sourcemap.json
+
+# Wally-installed dependencies (run `wally install`)
+Packages/
+wally.lock

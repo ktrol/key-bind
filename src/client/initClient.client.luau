@@ -1,0 +1,23 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIManager = require(ReplicatedStorage.Shared.UIManager)
+local HeroSelect = require(script.Parent.HeroSelect)
+local EscMenu = require(script.Parent.EscMenu)
+local SettingsMenu = require(script.Parent.Settings)
+local HUD = require(script.Parent.Hud)
+local MiniMap = require(script.Parent.MiniMap)
+local CenterHud = require(script.Parent.CenterHud)
+
+local hudGui = HUD()
+local heroGui = HeroSelect()
+local escGui = EscMenu(UIManager)
+local Settings = SettingsMenu()
+local miniMapGui = MiniMap()
+local CenterGui = CenterHud()
+
+UIManager.register("HeroSelect", heroGui)
+UIManager.register("EscMenu", escGui)
+UIManager.register("Settings", Settings)
+
+UIManager.registerPersistent("HUD", hudGui)
+UIManager.registerPersistent("MiniMap", miniMapGui)
+UIManager.registerPersistent("CenterHud", CenterGui)
