@@ -2,6 +2,9 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local UIManager = require(ReplicatedStorage.Shared.UIManager)
 
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
@@ -33,6 +36,12 @@ UserInputService.InputChanged:Connect(function(input, gameProcessed)
 end)
 
 RunService.RenderStepped:Connect(function()
+	-- mouse is free + cursor shown for as long as ANY menu screen is open (esc, settings, character),
+	-- and only relocks once you leave them all. Enforced every frame so nothing else can unstick it.
+	local inMenu = UIManager.getCurrent() ~= nil
+	UserInputService.MouseBehavior = if inMenu then Enum.MouseBehavior.Default else Enum.MouseBehavior.LockCenter
+	UserInputService.MouseIconEnabled = inMenu
+
 	local character = player.Character
 	if not character then
 		return

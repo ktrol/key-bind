@@ -23,6 +23,11 @@ function UIManager.show(name: string)
         end
     end
 
+    -- going back to a persistent screen (HUD) means no menu is open anymore
+    if persistantScreens[name] then
+        currentScreen = nil
+    end
+
     -- show new screen
     if screens[name] then
         screens[name].Enabled = true

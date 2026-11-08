@@ -21,8 +21,9 @@ local function EscMenu(UIManager)
 			return
 		end
 		if input.KeyCode == Enum.KeyCode.M then
-			if UIManager.getCurrent() == "EscMenu" then
-				UIManager.hide("EscMenu") -- resume, hide everything
+			local current = UIManager.getCurrent()
+			if current then
+				UIManager.hide(current) -- M closes whichever menu is open (esc, settings, character)
 				isOpen:set(false)
 				UIManager.show("HUD")
 			else
@@ -32,11 +33,7 @@ local function EscMenu(UIManager)
 		end
 	end)
 	scope:Observer(isOpen):onChange(function()
-		-- free the mouse and show the cursor while the menu is open; relock for gameplay on close
-		local open = Fusion.peek(isOpen)
-		UserInputService.MouseBehavior = if open then Enum.MouseBehavior.Default else Enum.MouseBehavior.LockCenter
-		UserInputService.MouseIconEnabled = open
-		if not open then
+		if not Fusion.peek(isOpen) then
 			for _, hovered in hoveredStates do
 				hovered:set(false)
 			end
