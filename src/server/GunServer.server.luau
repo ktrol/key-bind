@@ -18,14 +18,27 @@ GunRemote.OnServerEvent:Connect(function(player, heroName)
 	GunManager.Equip(player, heroName)
 end)
 
--- re-equip on every respawn using their saved hero
-Players.PlayerAdded:Connect(function(player)
+-- equips the player's saved hero gun onto their current character
+local function equipSavedHero(player: Player)
+	local profile = ProfileManager:WaitForProfile(player)
+	local heroName = profile and profile.Data.CurrentCharacter
+	if heroName and heroName ~= "" and player.Character then
+		task.wait(0.5) -- let R15 parts finish loading
+		GunManager.Equip(player, heroName)
+	end
+end
+
+-- re-equip on every respawn, and also for a character that spawned before this script connected
+local function setupPlayer(player: Player)
 	player.CharacterAdded:Connect(function()
-		local profile = ProfileManager:WaitForProfile(player)
-		local heroName = profile and profile.Data.CurrentCharacter
-		if heroName and heroName ~= "" then
-			task.wait(0.5) -- let R15 parts finish loading
-			GunManager.Equip(player, heroName)
-		end
+		equipSavedHero(player)
 	end)
-end)
+	if player.Character then
+		task.spawn(equipSavedHero, player)
+	end
+end
+
+for _, player in Players:GetPlayers() do
+	setupPlayer(player)
+end
+Players.PlayerAdded:Connect(setupPlayer)

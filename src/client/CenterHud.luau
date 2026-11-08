@@ -306,35 +306,43 @@ end
 -- Data hookups
 ----------------------------------------------------------------
 
-local function getAmmo()
-	local character = player.Character
-	if not character then
-		return
-	end
-	local gun = character:FindFirstChild("EquippedGun")
-	if not gun then
-		return
-	end
+local gunConnections: {RBXScriptConnection} = {}
 
-	State.currentAmmo:set(gun:GetAttribute("Ammo") or 0)
-	State.maxAmmo:set(gun:GetAttribute("MagSize") or 0)
-	State.Reloading:set(gun:GetAttribute("Reloading") or false)
-	State.ReloadingTime:set(gun:GetAttribute("ReloadTime") or 0)
+-- (re)binds the HUD to the current gun; called every time a new EquippedGun appears
+local function bindGun(gun: Instance)
+	for _, connection in gunConnections do
+		connection:Disconnect()
+	end
+	table.clear(gunConnections)
 
-	gun:GetAttributeChangedSignal("Ammo"):Connect(function()
+	local function refresh()
 		State.currentAmmo:set(gun:GetAttribute("Ammo") or 0)
-	end)
-	gun:GetAttributeChangedSignal("MagSize"):Connect(function()
 		State.maxAmmo:set(gun:GetAttribute("MagSize") or 0)
-	end)
-	gun:GetAttributeChangedSignal("Reloading"):Connect(function()
-	local reloading = gun:GetAttribute("Reloading") or false
-	State.Reloading:set(reloading)
-	if reloading then
-		State.ReloadStartTime:set(gun:GetAttribute("ReloadStartTime") or workspace:GetServerTimeNow())
 		State.ReloadingTime:set(gun:GetAttribute("ReloadTime") or 0)
+		local reloading = gun:GetAttribute("Reloading") or false
+		State.Reloading:set(reloading)
+		if reloading then
+			State.ReloadStartTime:set(gun:GetAttribute("ReloadStartTime") or workspace:GetServerTimeNow())
+		end
 	end
-end)
+
+	refresh()
+	for _, attribute in { "Ammo", "MagSize", "Reloading", "ReloadStartTime", "ReloadTime" } do
+		table.insert(gunConnections, gun:GetAttributeChangedSignal(attribute):Connect(refresh))
+	end
+end
+
+-- watches a character for a gun being equipped at any time (respawn, hero change, late server equip)
+local function watchCharacter(character: Model)
+	local existing = character:FindFirstChild("EquippedGun")
+	if existing then
+		bindGun(existing)
+	end
+	character.ChildAdded:Connect(function(child)
+		if child.Name == "EquippedGun" then
+			bindGun(child)
+		end
+	end)
 end
 
 -- stamina regen loop, runs once for the whole client
@@ -362,14 +370,32 @@ end)
 -- Root
 ----------------------------------------------------------------
 
+----------------------------------------------------------------
+-- Menu hint
+----------------------------------------------------------------
+
+local function MenuHint()
+	return scope:New("TextLabel")({
+		Name = "MenuHint",
+		Size = UDim2.fromOffset(200, 24),
+		Position = UDim2.new(1, -16, 1, -16), -- bottom right, 16px margin
+		AnchorPoint = Vector2.new(1, 1),
+		BackgroundTransparency = 1, -- no background
+		Text = "Press M for menu",
+		TextColor3 = Color3.new(1, 1, 1),
+		TextSize = 18,
+		Font = Enum.Font.GothamBold,
+		TextXAlignment = Enum.TextXAlignment.Right,
+	})
+end
+
 local function CenterHud()
 	player.CharacterAdded:Connect(function(character)
-        UserInputService.MouseIconEnabled = false
-		character:WaitForChild("EquippedGun", 5)
-		getAmmo()
+		UserInputService.MouseIconEnabled = false
+		watchCharacter(character)
 	end)
 	if player.Character then
-		getAmmo()
+		watchCharacter(player.Character)
 	end
 
 	return scope:New("ScreenGui")({
@@ -384,6 +410,7 @@ local function CenterHud()
 			StaminaBar(),
 			AmmoDisplay(),
 			Counter(),
+			MenuHint(),
 		},
 	})
 end
