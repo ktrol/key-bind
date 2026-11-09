@@ -1,11 +1,10 @@
 -- Connected Discord-GitHub
 --!strict
 --[[
-	CombatService (server-authoritative combat for "Key Bind")
-	Handles: gun firing (raycast + spread + headshots), reloading, and dash stamina.
-	The client only ever sends *intent* (aim point, "dash", "reload"); every number that matters
-	(ammo, fire rate, range, damage, stamina) is decided and validated here, so exploiters can't fake it.
-	Credits: Maid by Quenty (https://github.com/Quenty/NevermoreEngine), used for per-player cleanup.
+	Server side combat for Key Bind: shooting, reloading and dash stamina.
+	The client only tells us what it wants to do (aim point, dash, reload). Ammo, fire rate,
+	damage and stamina are all decided here so nobody can fake them with an exploit.
+	Maid by Quenty (https://github.com/Quenty/NevermoreEngine) is used for cleanup when a player leaves.
 ]]
 
 local Players = game:GetService("Players")
@@ -13,7 +12,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
--- Maid is a third-party library; kept typed as `any` because the package ships without Luau types.
+-- Maid has no type annotations so anything holding one is typed as any
 local Maid = require(ReplicatedStorage.Packages.maid)
 local Remotes = ReplicatedStorage.RemoteEvents
 local FireGun = Remotes.FireGun :: RemoteEvent
@@ -21,33 +20,31 @@ local ReloadGun = Remotes.ReloadGun :: RemoteEvent
 local UseDash = Remotes.UseDash :: RemoteEvent
 local StaminaUpdate = Remotes.StaminaUpdate :: RemoteEvent
 
--- Tuning values live in one place so balancing never means hunting through logic.
+-- all the numbers I tweak while balancing, kept up here
 local MAX_CHARGES = 3
-local RECHARGE_TIME = 4 -- seconds for one dash charge to refill
-local DASH_SPEED = 80 -- studs/second applied along the dash direction
-local DASH_MIN_INTERVAL = 0.35 -- stops one key mash from burning every charge in a few frames
-local REPLICATION_STEP = 0.05 -- progress change needed before we bother the client again
+local RECHARGE_TIME = 4 -- seconds to get one charge back
+local DASH_SPEED = 80 -- studs per second
+local DASH_MIN_INTERVAL = 0.35 -- so mashing shift cant burn all 3 charges at once
+local REPLICATION_STEP = 0.05 -- how much the bar has to move before we send it to the client again
 local HEADSHOT_MULTIPLIER = 2
 local DEFAULT_FIRE_RATE = 0.1
 local DEFAULT_RANGE = 50
 
--- A single Random object is cheaper and better distributed than calling math.random per pellet.
+-- one Random object reused for every shot instead of math.random each time
 local rng = Random.new()
 
----------------------------------------------------------------------------
--- Stamina: a small class built with metatables
----------------------------------------------------------------------------
+-- Stamina class (metatable based)
 
 type StaminaData = {
 	owner: Player,
 	charges: number,
-	progress: number, -- 0..1 fraction of the next charge
-	lastSent: number, -- progress value last replicated, used to throttle remotes
-	lastSpend: number, -- os.clock() of the last dash
+	progress: number, -- 0 to 1, how far along the next charge is
+	lastSent: number, -- progress we last sent, used to throttle the remote
+	lastSpend: number, -- os.clock of the last dash
 }
 
 local Stamina = {}
-Stamina.__index = Stamina -- missing keys on an instance fall back to the methods on this table
+Stamina.__index = Stamina -- lets instances find the methods below through the metatable
 export type Stamina = typeof(setmetatable({} :: StaminaData, Stamina))
 
 function Stamina.new(owner: Player): Stamina
@@ -62,13 +59,13 @@ function Stamina.new(owner: Player): Stamina
 	return self
 end
 
--- Pushes the current state to the owner so their HUD matches the server's truth.
+-- sends the real values to the client so their hud matches
 function Stamina.Replicate(self: Stamina)
 	self.lastSent = self.progress
 	StaminaUpdate:FireClient(self.owner, self.charges, self.progress)
 end
 
--- Returns whether a charge was spent; the caller must not dash when this is false.
+-- true if a charge was spent, caller only dashes when this is true
 function Stamina.TrySpend(self: Stamina): boolean
 	local now = os.clock()
 	if self.charges < 1 or now - self.lastSpend < DASH_MIN_INTERVAL then
@@ -80,24 +77,22 @@ function Stamina.TrySpend(self: Stamina): boolean
 	return true
 end
 
--- Called every Heartbeat with the frame delta so regeneration is frame-rate independent.
+-- runs every heartbeat, using dt so regen speed doesnt depend on fps
 function Stamina.Tick(self: Stamina, dt: number)
 	if self.charges >= MAX_CHARGES then
-		return -- full: nothing to regenerate, and no remote traffic either
+		return -- already full, nothing to do
 	end
 	self.progress += dt / RECHARGE_TIME
 	if self.progress >= 1 then
 		self.charges += 1
 		self.progress = 0
-		self:Replicate() -- completed charges always replicate immediately
+		self:Replicate() -- a finished charge is always sent right away
 	elseif self.progress - self.lastSent >= REPLICATION_STEP then
-		self:Replicate() -- partial progress is throttled to ~20 updates per charge
+		self:Replicate() -- partial progress only gets sent every so often (about 20 times per charge)
 	end
 end
 
----------------------------------------------------------------------------
--- Per-player bookkeeping
----------------------------------------------------------------------------
+-- per player state
 
 type PlayerCombat = {
 	stamina: Stamina,
@@ -106,13 +101,13 @@ type PlayerCombat = {
 
 local combats: {[Player]: PlayerCombat} = {}
 
--- Gun stats are written onto the gun as Attributes by GunManager.Equip, so the gun Instance is the state.
+-- GunManager.Equip puts the stats on the gun as attributes, so the gun itself holds the state
 local function getGun(player: Player): Instance?
 	local character = player.Character
 	return character and character:FindFirstChild("EquippedGun")
 end
 
--- Returns the character and its root part only if the player is alive; every action needs both.
+-- gives back character, root and humanoid only if the player is alive, shooting and dashing both need them
 local function getLivingCharacter(player: Player): (Model?, BasePart?, Humanoid?)
 	local character = player.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -123,14 +118,12 @@ local function getLivingCharacter(player: Player): (Model?, BasePart?, Humanoid?
 	return nil, nil, nil
 end
 
----------------------------------------------------------------------------
--- Weapons
----------------------------------------------------------------------------
+-- weapons
 
 local function startReload(gun: Instance)
 	local magSize = gun:GetAttribute("MagSize")
 	local reloadTime = gun:GetAttribute("ReloadTime")
-	-- Guard against double reloads, full mags, and guns that were never configured.
+	-- skip if already reloading, mag is full, or the gun has no stats
 	if gun:GetAttribute("Reloading") or typeof(magSize) ~= "number" or typeof(reloadTime) ~= "number" then
 		return
 	end
@@ -138,10 +131,10 @@ local function startReload(gun: Instance)
 		return
 	end
 	gun:SetAttribute("Reloading", true)
-	gun:SetAttribute("ReloadStartTime", Workspace:GetServerTimeNow()) -- clients animate the reload bar from this
+	gun:SetAttribute("ReloadStartTime", Workspace:GetServerTimeNow()) -- the client reload bar uses this
 
 	task.delay(reloadTime, function()
-		-- The player may have died or switched hero mid-reload, which destroys the gun.
+		-- gun gets destroyed if they died or switched hero while reloading
 		if gun.Parent then
 			gun:SetAttribute("Ammo", magSize)
 			gun:SetAttribute("Reloading", false)
@@ -149,7 +142,7 @@ local function startReload(gun: Instance)
 	end)
 end
 
--- Rotates the aim direction by a random cone angle. CFrame.lookAt builds the basis, Angles perturbs it.
+-- lookAt gives the aim rotation, then Angles nudges it by a random amount for spread
 local function applySpread(origin: Vector3, target: Vector3, spreadDegrees: number): Vector3
 	local aim = CFrame.lookAt(origin, target)
 	local yaw = math.rad(rng:NextNumber(-spreadDegrees, spreadDegrees))
@@ -157,33 +150,33 @@ local function applySpread(origin: Vector3, target: Vector3, spreadDegrees: numb
 	return (aim * CFrame.Angles(pitch, yaw, 0)).LookVector
 end
 
--- Applies damage to whatever the ray hit and returns true if a humanoid was damaged.
+-- damages whatever the ray hit, returns true if it was a humanoid
 local function dealDamage(hit: BasePart, shooter: Model, baseDamage: number): boolean
 	local victim = hit:FindFirstAncestorOfClass("Model")
 	local humanoid = victim and victim:FindFirstChildOfClass("Humanoid")
 	if not humanoid or victim == shooter or humanoid.Health <= 0 then
 		return false
 	end
-	-- Hitting the Head part is the only thing that makes a shot a headshot; the client can't claim one.
+	-- headshot is decided by the part the ray hit, the client never says it
 	local multiplier = if hit.Name == "Head" then HEADSHOT_MULTIPLIER else 1
 	humanoid:TakeDamage(baseDamage * multiplier)
 	return true
 end
 
--- GetAttribute returns `unknown`, so this narrows it to a number once and falls back to a default.
+-- GetAttribute returns unknown, this makes sure we get a number back
 local function getNumber(instance: Instance, name: string, default: number): number
 	local value = instance:GetAttribute(name)
 	return if typeof(value) == "number" then value else default
 end
 
--- Checks every rule that can reject a shot, then spends ammo. Returns the gun's stats if the shot is allowed.
+-- checks if the shot is allowed, takes the ammo, and gives back the gun stats
 type ShotStats = {range: number, spread: number, damage: number}
 
 local function consumeShot(gun: Instance): ShotStats?
 	local now = os.clock()
 	local fireRate = getNumber(gun, "FireRate", DEFAULT_FIRE_RATE)
 	local ammo = gun:GetAttribute("Ammo")
-	-- Server-side fire rate check: the client's own cooldown is only a courtesy and can't be trusted.
+	-- fire rate is checked here too since the client cooldown can be bypassed
 	if typeof(ammo) ~= "number" or ammo <= 0 or gun:GetAttribute("Reloading") then
 		return nil
 	end
@@ -193,7 +186,7 @@ local function consumeShot(gun: Instance): ShotStats?
 	gun:SetAttribute("LastShotTime", now)
 	gun:SetAttribute("Ammo", ammo - 1)
 	if ammo - 1 <= 0 then
-		startReload(gun) -- auto-reload on an empty magazine
+		startReload(gun) -- reload automatically when empty
 	end
 	return {
 		range = getNumber(gun, "Range", DEFAULT_RANGE),
@@ -203,7 +196,7 @@ local function consumeShot(gun: Instance): ShotStats?
 end
 
 local function onFire(player: Player, targetPoint: unknown)
-	-- `x == x` is false only for NaN, which would poison every CFrame calculation downstream.
+	-- a point that isnt equal to itself is NaN, which would break the CFrame math
 	if typeof(targetPoint) ~= "Vector3" or targetPoint ~= targetPoint then
 		return
 	end
@@ -221,7 +214,7 @@ local function onFire(player: Player, targetPoint: unknown)
 	local origin = root.Position
 	local direction = applySpread(origin, targetPoint, stats.spread) * stats.range
 
-	-- Exclude the shooter's own character so the ray can't hit their gun or body.
+	-- ignore the shooters own character
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = {character}
@@ -231,7 +224,7 @@ local function onFire(player: Player, targetPoint: unknown)
 		dealDamage(result.Instance, character, stats.damage)
 	end
 
-	-- Everyone but the shooter gets the tracer; the shooter already drew their own locally (no latency).
+	-- tell everyone else to draw the tracer, the shooter already drew theirs locally
 	local endPoint = if result then result.Position else origin + direction
 	for _, other in Players:GetPlayers() do
 		if other ~= player then
@@ -240,14 +233,12 @@ local function onFire(player: Player, targetPoint: unknown)
 	end
 end
 
----------------------------------------------------------------------------
--- Dash
----------------------------------------------------------------------------
+-- dash
 
 local function onDash(player: Player)
 	local combat = combats[player]
 	local _, root, humanoid = getLivingCharacter(player)
-	-- Validate the character first so a dead player never burns a charge.
+	-- check the character before spending so dead players dont lose charges
 	if not (combat and root and humanoid) then
 		return
 	end
@@ -255,24 +246,22 @@ local function onDash(player: Player)
 		return
 	end
 
-	-- Dash where the player is steering; if they're standing still, dash where they're facing.
+	-- dash the way they are moving, or the way they face if standing still
 	local look = root.CFrame.LookVector
 	local flatLook = Vector3.new(look.X, 0, look.Z).Unit
 	local direction = if humanoid.MoveDirection.Magnitude > 0.1 then humanoid.MoveDirection else flatLook
 
-	-- Overwrite only horizontal velocity so dashing mid-jump keeps the vertical arc intact.
+	-- keep the old vertical velocity so dashing in the air doesnt cancel the jump
 	local vertical = root.AssemblyLinearVelocity.Y
 	root.AssemblyLinearVelocity = direction * DASH_SPEED + Vector3.yAxis * vertical
 end
 
----------------------------------------------------------------------------
--- Lifecycle
----------------------------------------------------------------------------
+-- player join / leave
 
 local function onPlayerAdded(player: Player)
 	local maid = Maid.new()
 	combats[player] = {stamina = Stamina.new(player), maid = maid}
-	-- Any resource a player owns gets registered with the maid; one DoCleaning on leave frees all of it.
+	-- everything the player owns goes in the maid, DoCleaning on leave removes it all
 	maid:GiveTask(function()
 		combats[player] = nil
 	end)
@@ -285,7 +274,7 @@ local function onPlayerRemoving(player: Player)
 	end
 end
 
--- One shared Heartbeat loop beats a thread per player: constant scheduler cost no matter the player count.
+-- one heartbeat loop for everyone is cheaper than a thread per player
 RunService.Heartbeat:Connect(function(dt: number)
 	for _, combat in combats do
 		combat.stamina:Tick(dt)
@@ -301,7 +290,7 @@ ReloadGun.OnServerEvent:Connect(function(player: Player)
 	end
 end)
 
--- Players already in the server when this script starts (Studio playtests) would otherwise be missed.
+-- catch players that joined before this script ran (happens in studio)
 for _, player in Players:GetPlayers() do
 	task.spawn(onPlayerAdded, player)
 end
